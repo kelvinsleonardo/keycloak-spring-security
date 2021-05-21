@@ -14,10 +14,11 @@ public class BasicConfiguration extends WebSecurityConfigurerAdapter {
 
     @Override
     protected void configure(HttpSecurity http) throws Exception {
-        http.cors()
+        http.csrf().disable().cors()
                 .and()
                 .authorizeRequests()
                 .antMatchers(HttpMethod.GET, "/v1/hello").hasAuthority("USER")
+                .antMatchers("/**/public/**").permitAll()
                 .anyRequest()
                 .authenticated()
                 .and()
