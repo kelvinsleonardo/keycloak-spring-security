@@ -1,0 +1,48 @@
+version: '3.1'
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: wurstmeister/kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: localhost
+      KAFKA_CREATE_TOPICS: "axon-events:3:1"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+  eventStore:
+    image: mongo:4.4.5
+    container_name: "usuarioeventstore"
+    ports:
+      - "27017:27017"
+    command: --serviceExecutor adaptive
+    volumes:
+    - /tmp/event-store:/mongo/data
+
+  readStore:
+    image: mongo:4.4.5
+    container_name: "usuarioreadstore"
+    ports:
+      - "27018:27017"
+    command: --serviceExecutor adaptive
+    volumes:
+    - /tmp/read-store:/mongo/data
+
+  keycloak:
+    image: jboss/keycloak:13.0.0
+    container_name: keycloak
+    environment:
+      - KEYCLOAK_USER=admin
+      - KEYCLOAK_PASSWORD=admin
+      - DB_VENDOR=postgres
+      - DB_ADDR=172.17.0.1
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - JDBC_PARAMS=useSSL=false
+      - DB_DATABASE=keycloak
+    ports:
+      - "8080:8080"
