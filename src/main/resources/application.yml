@@ -1,0 +1,25 @@
+server:
+  port: 9000
+spring:
+  security:
+    user:
+      name: admin
+      password: admin
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/auth/realms/abamais
+          jwk-set-uri: http://localhost:8080/auth/realms/abamais/protocol/openid-connect/certs
+
+logging:
+  level:
+    org:
+      springframework:
+        security: DEBUG
+
+# Keycloak
+keycloak:
+  auth-server-url: http://localhost:8080/auth
+  master:
+    username: admin
+    password: admin
