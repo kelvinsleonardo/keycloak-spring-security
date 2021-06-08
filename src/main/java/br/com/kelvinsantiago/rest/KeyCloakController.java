@@ -1,5 +1,6 @@
 package br.com.kelvinsantiago.rest;
 
+import br.com.kelvinsantiago.KeycloakAuthorizationService;
 import br.com.kelvinsantiago.KeycloakService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +19,7 @@ import java.util.UUID;
 public class KeyCloakController {
 
     private final KeycloakService keycloakService;
+    private final KeycloakAuthorizationService keycloakAuthorizationService;
 
     @GetMapping("/public/keycloak/realms/{realmName}/users/{uid}/email-info")
     private ResponseEntity<Object> getEmailById(@PathVariable String realmName, @PathVariable UUID uid) {
@@ -50,5 +52,10 @@ public class KeyCloakController {
         return ResponseEntity.ok(keycloakService.createGroup(realmName));
     }
 
+    @PutMapping("/public/keycloak/realms/clients/{clientName}")
+    private ResponseEntity<Object> createClientID(@PathVariable String clientName) {
+        var id = UUID.randomUUID();
+        return ResponseEntity.ok(keycloakAuthorizationService.createClient(id.toString(), clientName));
+    }
 
 }
