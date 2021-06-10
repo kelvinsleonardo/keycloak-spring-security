@@ -16,6 +16,7 @@ logging:
     org:
       springframework:
         security: DEBUG
+    root: DEBUG
 
 # Keycloak
 keycloak:

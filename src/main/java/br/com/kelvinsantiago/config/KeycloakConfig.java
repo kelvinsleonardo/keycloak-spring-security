@@ -27,7 +27,7 @@ class KeycloakConfig {
                 .clientId("admin-cli")
                 .resteasyClient(
                         new ResteasyClientBuilder()
-                                .connectionPoolSize(10).build()
+                                .connectionPoolSize(100).build()
                 ).build();
     }
 }

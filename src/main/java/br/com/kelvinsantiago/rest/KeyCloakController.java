@@ -8,9 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import java.security.Principal;
+import javax.validation.constraints.NotNull;
 import java.util.UUID;
 
 @RestController
@@ -55,7 +53,24 @@ public class KeyCloakController {
     @PutMapping("/public/keycloak/realms/clients/{clientName}")
     private ResponseEntity<Object> createClientID(@PathVariable String clientName) {
         var id = UUID.randomUUID();
-        return ResponseEntity.ok(keycloakAuthorizationService.createClient(id.toString(), clientName));
+        return ResponseEntity.ok(keycloakAuthorizationService.createClientStructure(id.toString(), clientName));
+    }
+
+    @PutMapping("/public/keycloak/realms/users")
+    private ResponseEntity<Object> createUser(@RequestParam String username, @RequestParam String email, @RequestParam String password) {
+        return ResponseEntity.ok(keycloakAuthorizationService.createUserIfNotExist(username, email, password));
+    }
+
+    @PutMapping("/public/keycloak/realms/clients/{tenantId}/users/{username}/attributes")
+    private ResponseEntity<Object> addTenantToUser(@PathVariable String tenantId, @PathVariable String username) {
+        keycloakAuthorizationService.addClientToUser(tenantId, username);
+        return ResponseEntity.ok(HttpStatus.OK);
+    }
+
+    @PutMapping("/public/keycloak/realms/clients/{tenantId}/users/{username}/roles/{role}")
+    private ResponseEntity<Object> addRoleToUser(@PathVariable String tenantId, @PathVariable String username, @PathVariable KeycloakAuthorizationService.Roles role) {
+        keycloakAuthorizationService.addRoleToUser(tenantId, role, username);
+        return ResponseEntity.ok(HttpStatus.OK);
     }
 
 }

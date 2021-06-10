@@ -135,7 +135,6 @@ public class KeycloakService {
             throw new IllegalArgumentException(e);
         }
 
-
     }
 
     public Map<String, String> createGroup(String realmName) {

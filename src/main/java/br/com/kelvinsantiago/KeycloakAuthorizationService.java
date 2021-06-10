@@ -1,50 +1,70 @@
 package br.com.kelvinsantiago;
 
-import com.github.javafaker.Faker;
+import br.com.kelvinsantiago.enums.Resources;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import org.keycloak.admin.client.Keycloak;
-import org.keycloak.admin.client.KeycloakBuilder;
 import org.keycloak.admin.client.resource.RealmResource;
-import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.admin.client.resource.UsersResource;
-import org.keycloak.authorization.client.AuthzClient;
-import org.keycloak.authorization.client.Configuration;
-import org.keycloak.representations.idm.*;
+import org.keycloak.representations.idm.ClientRepresentation;
+import org.keycloak.representations.idm.CredentialRepresentation;
+import org.keycloak.representations.idm.RoleRepresentation;
+import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.representations.idm.authorization.*;
-import org.keycloak.util.JsonSerialization;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
+import javax.validation.constraints.NotNull;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static br.com.kelvinsantiago.KeycloakAuthorizationService.Scopes.*;
 import static java.lang.Boolean.FALSE;
 import static java.lang.Boolean.TRUE;
-import static java.util.Collections.singletonList;
-import static java.util.List.of;
-import static org.keycloak.OAuth2Constants.CLIENT_CREDENTIALS;
 
 @Service
 @RequiredArgsConstructor(onConstructor = @__(@Autowired))
 public class KeycloakAuthorizationService {
 
+    /**
+     * Pendências
+     * 1. Client                  OK
+     * 2. Resource                OK
+     * 3. Authorization Scope     OK
+     * 4. Policies                OK
+     * 5. Permissions             OK
+     * 6. Usuário                 OK
+     * 7. Tenant no usuario       OK
+     * 8. Definir papel no tenant OK
+     * <p>
+     * select entidade,
+     * json_agg(obj) as user_files
+     * from (
+     * SELECT p.entidade, json_build_object(
+     * 'perfil', gu.nome,
+     * 'podeAlterar', p.alterar,
+     * 'podeVer', true,
+     * 'podeDesativar', p.desativar,
+     * 'podeInserir', p.inserir) perfis
+     * FROM permissao p
+     * INNER JOIN grupousuario gu
+     * ON p.grupousuario_codigo = gu.codigo
+     * ) as obj
+     * where entidade like lower('%HABI%')
+     * group by entidade
+     */
+
     private static final String DEFAULT_REALM = "abamais";
 
     private final Keycloak keycloakMasterInstance;
-    private final Faker faker;
-
-    @Value("${keycloak.auth-server-url}")
-    private static String authServerUrl;
 
     @SneakyThrows
-    public Object createClient(String tenantId, String companyName) {
+    public ClientRepresentation createClientStructure(String tenantId, String companyName) {
         var clientRepresentation = new ClientRepresentation();
         clientRepresentation.setId(tenantId);
         clientRepresentation.setClientId(tenantId);
         clientRepresentation.setName(companyName.toUpperCase());
+        clientRepresentation.setDescription("Cliente " + companyName);
         clientRepresentation.setAuthorizationServicesEnabled(TRUE);
         clientRepresentation.setServiceAccountsEnabled(TRUE);
         clientRepresentation.setAuthorizationSettings(new ResourceServerRepresentation());
@@ -53,12 +73,12 @@ public class KeycloakAuthorizationService {
         /*=================================
          *   Create authorization scope
          *=================================*/
-        var scopes = Arrays.stream(Actions.values()).map(e -> new ScopeRepresentation(e.getName())).collect(Collectors.toSet());
+        var scopes = Arrays.stream(values()).map(e -> new ScopeRepresentation(e.getName())).collect(Collectors.toSet());
 
         /*=================================
          *   Create resource scope
          *=================================*/
-        var resources = Arrays.stream(Features.values())
+        var resources = Arrays.stream(Resources.values())
                 .map(e -> {
                             var resource = new ResourceRepresentation();
                             resource.setName("FUNC_" + e.getName());
@@ -106,6 +126,48 @@ public class KeycloakAuthorizationService {
                     clientResource.authorization().policies().create(policy);
                 });
 
+        /*=================================
+         *   Create permissions
+         *=================================*/
+        var scopePermissionResource = clientResource.authorization().permissions().scope();
+        var resourcesDat = clientResource.authorization().resources().resources();
+        var scopesDB = clientResource.authorization().scopes().scopes();
+        var policiesDB = clientResource.authorization().policies().policies();
+        Arrays.stream(Resources.values()).forEach(r -> {
+            r.getPermissions().forEach((key, value) -> {
+                var scopePermission = new ScopePermissionRepresentation();
+                var name = String.format("FUNCIONALIDADE_%s_PERMISSAO_%s", r.getName(), key);
+                scopePermission.setName(name);
+                scopePermission.setDescription(name);
+                scopePermission.setDecisionStrategy(DecisionStrategy.UNANIMOUS);
+                scopePermission.setType("scope");
+                scopePermission.setResources(Set.of(
+                        resourcesDat
+                                .stream()
+                                .filter(x -> x.getName().equals("FUNC_" + r.getName()))
+                                .map(ResourceRepresentation::getId).findFirst().orElse(""))
+                );
+
+                // Searching scopes
+                var scopeIds = value
+                        .stream()
+                        .map(x -> scopesDB.stream().filter(s -> s.getName().equals(x.getName())).map(ScopeRepresentation::getId).findFirst().orElse(""))
+                        .collect(Collectors.toSet());
+                scopePermission.setScopes(scopeIds);
+
+                // Search policy by role
+                var policy = Set.of(
+                        policiesDB
+                                .stream()
+                                .filter(x -> x.getName().equals("POLITICA_PERFIL_" + key.getName()))
+                                .map(AbstractPolicyRepresentation::getId)
+                                .findFirst().orElse(""));
+                scopePermission.setPolicies(policy);
+
+                // Save
+                scopePermissionResource.create(scopePermission);
+            });
+        });
 
         return keycloakMasterInstance
                 .realm(DEFAULT_REALM)
@@ -115,93 +177,96 @@ public class KeycloakAuthorizationService {
 
     }
 
-    private String buildConfigOption(String... values) {
-        StringBuilder builder = new StringBuilder();
+    public UserRepresentation createUserIfNotExist(@NotNull String username, @NotNull String email, @NotNull String password) {
 
-        for (String value : values) {
-            if (builder.length() > 0) {
-                builder.append(",");
-            }
-            builder.append("\"" + value + "\"");
-        }
+        RealmResource realmResource = keycloakMasterInstance.realm(DEFAULT_REALM);
+        UsersResource userResource = realmResource.users();
 
-        return builder.insert(0, "[").append("]").toString();
+        return userResource.search(username, true)
+                .stream()
+                .findFirst()
+                .orElseGet(() -> {
+
+                    UserRepresentation user = new UserRepresentation();
+                    user.setUsername(username);
+                    user.setEmailVerified(TRUE);
+                    user.setEnabled(TRUE);
+                    user.setEmail(email);
+                    try {
+                        var response = userResource.create(user);
+                        var userId = response.getLocation().getPath().replaceAll(".*/([^/]+)$", "$1");
+
+                        // Define password
+                        var credentialRepresentation = new CredentialRepresentation();
+                        credentialRepresentation.setType(CredentialRepresentation.PASSWORD);
+                        credentialRepresentation.setValue(password);
+                        credentialRepresentation.setTemporary(FALSE);
+                        userResource.get(userId).resetPassword(credentialRepresentation);
+
+                        response.close();
+                        return userResource.get(userId).toRepresentation();
+                    } catch (Exception e) {
+                        throw new IllegalArgumentException(e);
+                    }
+                });
+
+
     }
 
-    public enum Features {
-        USUARIO("USUARIO"),
-        GRUPO("GRUPO"),
-        PERMISSAO("PERMISSAO"),
-        LOG("LOG"),
-        EMPRESA("EMPRESA"),
-        FILIAL("FILIAL"),
-        FORNECEDOR("FORNECEDOR"),
-        CARGO("CARGO"),
-        FUNCIONARIO("FUNCIONARIO"),
-        CLIENTE("CLIENTE"),
-        EQUIPE("CLIENTES"),
-        PROTOCOLO("PROTOCOLO"),
-        DOMINIO("DOMINIO"),
-        AVALIACAO("AVALIACAO"),
-        FAMILIA("FAMILIA"),
-        TIPO_AVALIACAO("TIPO_AVALIACAO"),
-        TIPO_RESPOSTA("TIPO_RESPOSTA"),
-        TIPO_REFORCO("TIPO_REFORCOO"),
-        PARAMETROS_CLIENTE("PARAMETROS_CLIENTE"),
-        PROGRAMA("PROGRAMA"),
-        PROGRAMA_PAIS("PROGRAMA_PAIS"),
-        PROGRAMA_ESCOLA("PROGRAMA_ESCOLA"),
-        CURRICULUM("CURRICULUM"),
-        COMPORTAMENTO("COMPORTAMENTO"),
-        REFORCADOR("REFORCADOR"),
-        INCIDENTE("INCIDENTE"),
-        REGISTRO("REGISTRO"),
-        TIPO_REGISTRO("TIPO_REGISTRO"),
-        LOCAL_REGISTRO("LOCAL_REGISTRO"),
-        SESSAO("SESSAO"),
-        SESSAO_PAIS("SESSAO_PAIS"),
-        SESSAO_ESCOLA("SESSAO_ESCOLA"),
-        SUPERVISAO("SUPERVISAO"),
-        GRUPO_RELATORIO("GRUPO_RELATORIO"),
-        ASSERTIVIDADE_RELATORIO("ASSERTIVIDADE_RELATORIO"),
-        SITUACAO_ALVOS_RELATORIO("SITUACAO_ALVOS_RELATORIO"),
-        BAIRRO("BAIRRO"),
-        CIDADE("CIDADE"),
-        ENDERECO("ENDERECO"),
-        ESTADO("ESTADO"),
-        AGENDA("AGENDA"),
-        SUPORTE("SUPORTE"),
-        ESCALA("ESCALA"),
-        PRONTUARIO("PRONTUARIO"),
-        ANAMNESE("ANAMNESE"),
-        HABILIDADES_BASICAS("HABILIDADES_BASICAS"),
-        HABILIDADES_BASICAS_AREAS("HABILIDADES_BASICAS_AREAS"),
-        HABILIDADES_BASICAS_PROGRAMAS("HABILIDADES_BASICAS_PROGRAMAS"),
-        HABILIDADES_BASICAS_PROGRAMAS_ITENS("HABILIDADES_BASICAS_PROGRAMAS_ITENS");
+    public void addRoleToUser(String tenantId, Roles role, String username) {
+        var resourceUser = keycloakMasterInstance
+                .realm(DEFAULT_REALM)
+                .users();
 
-        private String code;
+        var roleRepresentation = keycloakMasterInstance
+                .realm(DEFAULT_REALM)
+                .clients()
+                .get(tenantId)
+                .roles()
+                .get(role.getName()).toRepresentation();
 
-        public String getCode() {
-            return code;
-        }
+        resourceUser
+                .search(username, true)
+                .stream()
+                .findFirst()
+                .ifPresentOrElse(u -> {
+                    resourceUser
+                            .get(u.getId())
+                            .roles()
+                            .clientLevel(tenantId)
+                            .add(List.of(roleRepresentation));
 
-        public static Features of(String value) {
-            return Arrays.stream(Features.values())
-                    .filter(v -> value.equals(v.getCode()))
-                    .findFirst()
-                    .orElse(null);
-        }
+                }, () -> {
+                    throw new IllegalArgumentException("User not found");
+                });
 
-        Features(String code) {
-            this.code = code;
-        }
-
-        public String getName() {
-            return name();
-        }
     }
 
-    public enum Actions {
+    public void addClientToUser(String tenantId, String username) {
+        keycloakMasterInstance
+                .realm(DEFAULT_REALM)
+                .users()
+                .search(username, true)
+                .stream()
+                .findFirst()
+                .ifPresentOrElse(u -> {
+                    if (Optional.ofNullable(u.getAttributes()).isEmpty())
+                        u.setAttributes(new HashMap<>());
+
+                    u.getAttributes().put("tenants", u.getAttributes().getOrDefault("tenants", new ArrayList<>()));
+                    u.getAttributes().get("tenants").add(tenantId);
+                    keycloakMasterInstance
+                            .realm(DEFAULT_REALM)
+                            .users()
+                            .get(u.getId())
+                            .update(u);
+                }, () -> {
+                    throw new IllegalArgumentException("User not found");
+                });
+
+    }
+
+    public enum Scopes {
         EDITAR("EDITAR"),
         EXCLUIR("EXCLUIR"),
         INATIVAR("INATIVAR"),
@@ -214,14 +279,14 @@ public class KeycloakAuthorizationService {
             return code;
         }
 
-        public static Actions of(String value) {
-            return Arrays.stream(Actions.values())
+        public static Scopes of(String value) {
+            return Arrays.stream(values())
                     .filter(v -> value.equals(v.getCode()))
                     .findFirst()
                     .orElse(null);
         }
 
-        Actions(String code) {
+        Scopes(String code) {
             this.code = code;
         }
 
@@ -247,7 +312,7 @@ public class KeycloakAuthorizationService {
         }
 
         public static Roles of(String value) {
-            return Arrays.stream(Roles.values())
+            return Arrays.stream(values())
                     .filter(v -> value.equals(v.getCode()))
                     .findFirst()
                     .orElse(null);
